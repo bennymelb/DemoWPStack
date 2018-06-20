@@ -1,0 +1,204 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Demo wordpress backend",
+    "Parameters": {
+        "Environment": {
+            "Description": "Indicate this is a Dev/QA/Staging/Prod environment",
+            "Type": "String",
+            "Default": "Dev",
+            "AllowedValues": [
+                "Dev",
+                "QA",
+                "Staging",
+                "Prod"
+            ],
+            "ConstraintDescription": "Environment value must be either Dev, QA, Staging or Prod"
+        },
+        "ServiceName": {
+            "Description": "Name of the service thats going to run in this VPC",
+            "Type": "String",
+            "Default": "Demo-WP"
+        },
+        "VPC":{
+            "Description": "The ID of VPC where the database is going to reside",
+            "Type": "AWS::EC2::VPC::Id"
+        },
+        "SubnetList": {
+            "Description": "The list of Subnet for the DB Subnet group",
+            "Type": "List<AWS::EC2::Subnet::Id>"
+        },
+        "EBSG": {
+            "Description": "The ID of the EB instance SG for allowing access to RDS",
+            "Type": "AWS::EC2::SecurityGroup::Id"
+        },
+        "DBRootUserName": {
+            "Description": "The master username of RDS",
+            "Type": "String",
+            "Default": "root",
+            "MinLength": 4,
+            "MaxLength": 20,
+            "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+            "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+        },
+        "DBRootPassword": {
+            "Description": "The root password of the RDS",
+            "Type": "String",
+            "NoEcho": "true",
+            "MinLength": 6,
+            "MaxLength": 30
+        },
+        "DBName": {
+            "Description": "The name of the database",
+            "Type": "String",
+            "MinLength": 4,
+            "AllowedPattern":"[a-zA-Z][a-zA-Z0-9]*",
+            "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+        },        
+        "DBInstanceClass": {
+            "Description": "RDS Instance size",
+            "Type": "String",
+            "Default": "db.t2.small",
+            "AllowedValues" : [ "db.t2.small", "db.t2.medium", "db.r3.large", "db.r3.xlarge", "db.r3.2xlarge", "db.r3.4xlarge", "db.r3.8xlarge" ],
+            "ConstraintDescription" : "Must be a valid Aurora RDS instance type."
+        },
+        "BackupRetentionPeriod": {
+            "Description": "The backup retention period",
+            "Type": "Number",
+            "Default": 7,
+            "AllowedValues": [ 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35]
+        }
+    },
+    "Metadata": {
+        "AWS::CloudFormation::Interface" : {
+            "ParameterGroups" : [
+                {
+                    "Label" : { "default" : "Environment" },
+                    "Parameters" : [ "Environment", "ServiceName" ]
+                },
+                {
+                    "Label" : { "default" : "Network Configuration" },
+                    "Parameters" : [ "VPC", "SubnetList", "EBSG" ]
+                },
+                {
+                    "Label" : { "default" : "Database Configuration" },
+                    "Parameters" : [ "DBInstanceClass", "DBName", "DBRootUserName", "DBRootPassword", "BackupRetentionPeriod" ]
+                }
+            ]
+        }
+    },
+    "Resources": {
+        "RDSSubnetGroup" : {
+            "Type" : "AWS::RDS::DBSubnetGroup",
+            "Properties" : {
+               "DBSubnetGroupDescription" :  { "Fn::Join": [ "", [ "MelbourneFreeWiFi RDS Subnet Group ", { "Ref": "Environment" }] ] },
+               "SubnetIds" : {"Ref": "SubnetList"},
+               "Tags" : [ 
+                    { "Key": "Name", "Value": { "Fn::Join": [ "", [ "MelbourneFreeWiFi-RDS-Subnet-Group-", { "Ref": "Environment" } ]] } },
+                    { "Key": "Env", "Value": { "Ref": "Environment"} }
+                ]
+            }
+         },
+         "RDSSG": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription" : "Security group for RDS server",
+                "VpcId" : { "Ref": "VPC" },
+                "SecurityGroupIngress" : [
+                    {"IpProtocol": "tcp", "FromPort": "3306", "ToPort": "3306", "CidrIp": "116.250.224.16/32"},
+                    {"IpProtocol": "tcp", "FromPort": "3306", "ToPort": "3306", "CidrIp": "210.11.132.138/32"},
+                    {"IpProtocol": "tcp", "FromPort": "3306", "ToPort": "3306", "CidrIp": "210.11.133.0/27"},
+                    {"IpProtocol": "tcp", "FromPort": "3306", "ToPort": "3306", "SourceSecurityGroupId": {"Ref": "EBSG"} }
+                ],
+                "Tags": [
+                    { "Key": "Name", "Value": { "Fn::Join": [ "", [ {"Ref": "ServiceName" }, " Main Database RDS Server Security Group", { "Ref": "Environment" } ]] } },
+                    { "Key": "Env", "Value": { "Ref": "Environment" } }
+                ]
+            }
+        },
+        "RDSDBClusterParameterGroup":{
+            "Type": "AWS::RDS::DBClusterParameterGroup",
+            "Properties" : {
+              "Description" : { "Fn::Join": [ "", [ {"Ref": "ServiceName"}, " Aurora Cluster Parameter Group ", {"Ref":"Environment"}] ] },
+              "Family" : "aurora5.6",
+              "Parameters" : {
+                "time_zone" : "UTC"
+              },
+              "Tags": [
+                { "Key": "Name", "Value": { "Fn::Join": [ "", [ {"Ref": "ServiceName" }, " Aurora Cluster Parameter Group ", { "Ref": "Environment" } ]] } },
+                { "Key": "Env", "Value": { "Ref": "Environment" } }        
+              ]
+            }
+        },
+        "RDSCluster" : {
+            "Type" : "AWS::RDS::DBCluster",
+            "Properties": {
+                "BackupRetentionPeriod" : {"Ref": "BackupRetentionPeriod"},
+                "DatabaseName" : {"Ref":"DBName"},
+                "DBSubnetGroupName": {"Ref": "RDSSubnetGroup"},
+                "Engine": "aurora",
+                "MasterUsername": {"Ref":"DBRootUserName"},
+                "MasterUserPassword": {"Ref":"DBRootPassword"},
+                "PreferredBackupWindow": "15:00-16:00",
+                "PreferredMaintenanceWindow": "tue:16:00-tue:17:00",
+                "VpcSecurityGroupIds": [ {"Ref":"RDSSG"} ],
+                "DBClusterParameterGroupName" : {"Ref": "RDSDBClusterParameterGroup"},
+                "Tags": [
+                    { "Key": "Name", "Value": { "Fn::Join": [ "", [ {"Ref": "ServiceName" }, " RDS Cluster ", { "Ref": "Environment" } ]] } },
+                    { "Key": "Env", "Value": { "Ref": "Environment" } }                    
+                ]
+            },
+            "DeletionPolicy" : "Snapshot"
+        },
+        "DB1" : {
+            "Type" : "AWS::RDS::DBInstance",
+            "Properties" : {
+               "DBClusterIdentifier" : {"Ref": "RDSCluster"},
+               "DBInstanceClass" : {"Ref": "DBInstanceClass"},
+               "Engine" : "aurora",
+               "CopyTagsToSnapshot" : "true",
+               "PubliclyAccessible" : "true"
+            }            
+         }        
+    },
+    "Outputs": {
+        "StackName": {
+            "Description": "The name of the stack",
+            "Value": {"Ref": "AWS::StackName" },
+            "Export": {
+                "Name": {"Ref": "AWS::StackName" }
+            }
+        },
+        "StackId": {
+            "Description": "The ID of the stack",
+            "Value": {"Ref": "AWS::StackId" }            
+        },
+        "StackRDSSG": {
+            "Description" : "The ID of the RDS security group",
+            "Value" : {"Ref": "RDSSG"},
+            "Export" : {
+                "Name" : {"Fn::Sub": "${AWS::StackName}-RDSSGID" }
+            }
+        },
+        "StackRDSEndPoint": {
+            "Description": "The main RDS end point",
+            "Value" : {"Fn::GetAtt": ["RDSCluster", "Endpoint.Address"]},
+            "Export": {
+                "Name" : {"Fn::Sub": "${AWS::StackName}-RDSEndPoint"}
+            }
+        },
+        "StackRDSReadEndPoint": {
+            "Description": "The Read Replica RDS end point",
+            "Value" : {"Fn::GetAtt": ["RDSCluster", "ReadEndpoint.Address"]},
+            "Export": {
+                "Name" : {"Fn::Sub": "${AWS::StackName}-RDSReadEndPoint"}
+            }
+        },
+        "StackRDSPort": {
+            "Description": "The port for RDS end point",
+            "Value" : {"Fn::GetAtt": ["RDSCluster","Endpoint.Port"]},
+            "Export": {
+                "Name" : {"Fn::Sub": "${AWS::StackName}-RDSPort"}
+            }
+        }
+    }
+}
